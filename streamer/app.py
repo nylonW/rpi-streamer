@@ -145,6 +145,7 @@ def start_ffmpeg_process(config):
         "ffmpeg",
         "-loglevel", config["ffmpeg_loglevel"],
         *input_options,
+        "-i", input_url,  # Add main input source
         *additional_input_options, # Add separate audio input here if configured
     ]
 
