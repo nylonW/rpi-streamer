@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  nginx-rtmp:
+    image: tiangolo/nginx-rtmp # A pre-built Nginx with RTMP module
+    # If you prefer to build your own nginx from the nginx/nginx.conf:
+    # build:
+    #   context: ./nginx # Path to your nginx directory with Dockerfile (if you had one)
+    #   dockerfile: Dockerfile
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "1935:1935" # RTMP port
+      # - "8081:8081" # Optional: Nginx dummy HTTP port, if needed for health checks etc.
+    restart: unless-stopped
+
+  streamer-ui:
+    build:
+      context: ./streamer
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001" # Flask web UI
+    volumes:
+      - ./streamer/config:/app/config # Persistent config storage
+      # Mount USB video devices. You might need to list all potential devices.
+      # Or use privileged mode (less secure but often easier for device access)
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1 # Add more if you have multiple USB cams
+      # If the above device mapping doesn't work, try privileged mode (use with caution):
+      # privileged: true
+    depends_on:
+      - nginx-rtmp
+    restart: unless-stopped
+    # For Raspberry Pi (arm architecture), ensure your Python base image in streamer/Dockerfile supports arm
+    # python:3.9-slim usually has multi-arch support.
+    # If using specific base images, you might need `platform: linux/arm/v7` or `linux/arm64`
+    # depending on your Pi model (32-bit or 64-bit OS).

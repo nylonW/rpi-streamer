@@ -1,0 +1,21 @@
+[Unit]
+Description=Raspberry Pi Streamer Docker Compose Service
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+User=pi # Or your username that runs docker
+Group=docker # Or the group for docker
+WorkingDirectory=/home/pi/rpi-streamer # IMPORTANT: Change this to your project path
+ExecStart=/usr/local/bin/docker-compose up --remove-orphans
+ExecStop=/usr/local/bin/docker-compose down
+Restart=always
+RestartSec=10s
+
+# StandardOutput=syslog
+# StandardError=syslog
+# SyslogIdentifier=rpi-streamer
+
+[Install]
+WantedBy=multi-user.target

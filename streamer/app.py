@@ -1,0 +1,218 @@
+from flask import Flask, render_template, request, jsonify
+import subprocess
+import json
+import os
+import signal
+import threading
+import time
+
+app = Flask(__name__)
+
+CONFIG_FILE = 'config/config.json'
+FFMPEG_PROCESS = None
+DEFAULT_CONFIG = {
+    "input_type": "dji_rtmp",  # "dji_rtmp" or "usb_cam"
+    "dji_stream_key": "dji_stream",
+    "usb_device": "/dev/video0",
+    "usb_input_format": "mjpeg", # Common for USB cams, try "yuyv422" if MJPEG fails
+    "usb_resolution": "1280x720",
+    "usb_framerate": "30",
+    "output_rtsp_url": "rtsp://your-target-rtsp-server:8554/mystream",
+    "ffmpeg_loglevel": "info", # "quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug"
+    "re_encode_video": False, # If true, re-encodes video (CPU intensive)
+    "video_codec": "libx264", # e.g., libx264, libx265, copy
+    "video_preset": "ultrafast", # For libx264/libx265 if re-encoding
+    "video_bitrate": "2000k",   # For libx264/libx265 if re-encoding
+    "audio_codec": "aac",     # e.g., aac, copy
+    "audio_bitrate": "128k"   # if re-encoding
+}
+
+def load_config():
+    if not os.path.exists(os.path.dirname(CONFIG_FILE)):
+        os.makedirs(os.path.dirname(CONFIG_FILE))
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            try:
+                # Merge with defaults to ensure all keys exist
+                loaded_conf = json.load(f)
+                conf = DEFAULT_CONFIG.copy()
+                conf.update(loaded_conf)
+                return conf
+            except json.JSONDecodeError:
+                return DEFAULT_CONFIG.copy()
+    return DEFAULT_CONFIG.copy()
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=4)
+
+def stop_ffmpeg_process():
+    global FFMPEG_PROCESS
+    if FFMPEG_PROCESS and FFMPEG_PROCESS.poll() is None:
+        print("Stopping existing FFmpeg process...")
+        # Send SIGINT (Ctrl+C) for graceful shutdown, then terminate if needed
+        FFMPEG_PROCESS.send_signal(signal.SIGINT)
+        try:
+            FFMPEG_PROCESS.wait(timeout=10) # Wait up to 10 seconds
+        except subprocess.TimeoutExpired:
+            print("FFmpeg did not terminate gracefully, sending SIGKILL.")
+            FFMPEG_PROCESS.kill()
+            FFMPEG_PROCESS.wait() # Ensure it's reaped
+        FFMPEG_PROCESS = None
+        print("FFmpeg process stopped.")
+    elif FFMPEG_PROCESS: # Process already exited
+        FFMPEG_PROCESS = None # Clear the stale process object
+
+def start_ffmpeg_process(config):
+    global FFMPEG_PROCESS
+    stop_ffmpeg_process() # Ensure any existing process is stopped
+
+    input_options = []
+    input_url = ""
+
+    if config["input_type"] == "dji_rtmp":
+        # Nginx RTMP server is 'nginx-rtmp' inside Docker network
+        input_url = f"rtmp://nginx-rtmp:1935/live/{config['dji_stream_key']}"
+        input_options.extend(["-fflags", "nobuffer", "-flags", "low_delay"])
+    elif config["input_type"] == "usb_cam":
+        input_url = config["usb_device"]
+        input_options.extend([
+            "-f", "v4l2",
+            "-input_format", config["usb_input_format"],
+            "-video_size", config["usb_resolution"],
+            "-framerate", config["usb_framerate"]
+        ])
+    else:
+        print(f"Unknown input type: {config['input_type']}")
+        return
+
+    output_rtsp_url = config["output_rtsp_url"]
+
+    # Codec options
+    video_codec_opts = []
+    audio_codec_opts = []
+
+    if config.get("re_encode_video", False):
+        video_codec_opts.extend([
+            "-c:v", config.get("video_codec", "libx264"),
+            "-preset", config.get("video_preset", "ultrafast"),
+            "-b:v", config.get("video_bitrate", "2000k"),
+            "-tune", "zerolatency"
+        ])
+    else:
+        video_codec_opts.extend(["-c:v", "copy"])
+
+    # For USB cams, audio might not be copied directly or might not exist.
+    # Default to re-encoding AAC or copying if source is RTMP
+    if config["input_type"] == "usb_cam" and not config.get("re_encode_video", False):
+        # If copying video from USB, we often need to encode audio
+        # This assumes USB audio is available and compatible with AAC
+        audio_codec_opts.extend([
+            "-c:a", config.get("audio_codec", "aac"),
+            "-b:a", config.get("audio_bitrate", "128k")
+        ])
+        # To try and get audio from USB, you might need to add another -i for ALSA/Pulse
+        # e.g. -f alsa -i hw:0
+        # For simplicity here, we are not explicitly adding a separate audio input for USB cam
+        # Many USB webcams provide audio multiplexed with video through V4L2
+        # If no audio with USB cam, add -an to ffmpeg_cmd
+    elif config.get("re_encode_video", False): # Also re-encode audio if video is re-encoded
+         audio_codec_opts.extend([
+            "-c:a", config.get("audio_codec", "aac"),
+            "-b:a", config.get("audio_bitrate", "128k")
+        ])
+    else: # Copy audio for DJI RTMP or if not re-encoding video
+        audio_codec_opts.extend(["-c:a", "copy"])
+
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-loglevel", config["ffmpeg_loglevel"],
+        *input_options,
+        "-i", input_url,
+        *video_codec_opts,
+        *audio_codec_opts,
+        "-f", "rtsp",
+        "-rtsp_transport", "tcp", # More reliable over networks
+        output_rtsp_url
+    ]
+    # If no audio with USB cam and it's causing issues, add:
+    # if config["input_type"] == "usb_cam":
+    #     ffmpeg_cmd.insert(ffmpeg_cmd.index("-f", ffmpeg_cmd.index("-c:a") + 1) -1, "-an") # No audio
+
+    print(f"Starting FFmpeg with command: {' '.join(ffmpeg_cmd)}")
+    try:
+        # Start FFmpeg in a way that we can monitor its output if needed
+        FFMPEG_PROCESS = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        print(f"FFmpeg process started with PID: {FFMPEG_PROCESS.pid}")
+
+        # Optional: Thread to monitor FFmpeg output
+        def monitor_ffmpeg_output(proc):
+            for line in iter(proc.stdout.readline, b''):
+                print(f"[FFmpeg]: {line.decode().strip()}")
+            proc.stdout.close()
+            return_code = proc.wait()
+            if return_code:
+                print(f"FFmpeg process exited with error code {return_code}")
+            else:
+                print("FFmpeg process exited cleanly.")
+
+        threading.Thread(target=monitor_ffmpeg_output, args=(FFMPEG_PROCESS,), daemon=True).start()
+
+    except Exception as e:
+        print(f"Failed to start FFmpeg: {e}")
+        FFMPEG_PROCESS = None
+
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    config = load_config()
+    if request.method == 'POST':
+        form_data = request.form.to_dict()
+        # Convert checkbox value
+        form_data['re_encode_video'] = 're_encode_video' in request.form
+
+        config.update(form_data)
+        save_config(config)
+        print("Configuration updated. Restarting FFmpeg...")
+        start_ffmpeg_process(config) # Restart FFmpeg with new config
+        return jsonify(success=True, message="Configuration saved and FFmpeg (re)started.", config=config)
+
+    return render_template('index.html', config=config)
+
+@app.route('/status', methods=['GET'])
+def status():
+    global FFMPEG_PROCESS
+    config = load_config()
+    is_running = FFMPEG_PROCESS is not None and FFMPEG_PROCESS.poll() is None
+    pid = FFMPEG_PROCESS.pid if is_running else None
+    return jsonify(
+        is_running=is_running,
+        pid=pid,
+        config=config,
+        ffmpeg_command=' '.join(FFMPEG_PROCESS.args) if is_running and hasattr(FFMPEG_PROCESS, 'args') else "Not running"
+    )
+
+@app.route('/start', methods=['POST'])
+def start_stream():
+    config = load_config()
+    start_ffmpeg_process(config)
+    return jsonify(success=True, message="FFmpeg process initiated.")
+
+@app.route('/stop', methods=['POST'])
+def stop_stream():
+    stop_ffmpeg_process()
+    return jsonify(success=True, message="FFmpeg process stopped.")
+
+
+if __name__ == '__main__':
+    # Ensure config directory exists
+    if not os.path.exists(os.path.dirname(CONFIG_FILE)):
+        os.makedirs(os.path.dirname(CONFIG_FILE))
+
+    # Load config and start FFmpeg on initial startup
+    initial_config = load_config()
+    if initial_config.get("output_rtsp_url"): # Only start if output is configured
+        start_ffmpeg_process(initial_config)
+
+    app.run(host='0.0.0.0', port=5001)

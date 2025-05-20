@@ -1,0 +1,16 @@
+{
+    "input_type": "dji_rtmp",
+    "dji_stream_key": "dji_stream",
+    "usb_device": "/dev/video0",
+    "usb_input_format": "mjpeg",
+    "usb_resolution": "1280x720",
+    "usb_framerate": "30",
+    "output_rtsp_url": "rtsp://your-target-rtsp-server:8554/mystream",
+    "ffmpeg_loglevel": "info",
+    "re_encode_video": false,
+    "video_codec": "libx264",
+    "video_preset": "ultrafast",
+    "video_bitrate": "2000k",
+    "audio_codec": "aac",
+    "audio_bitrate": "128k"
+}

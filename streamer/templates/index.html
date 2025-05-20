@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Raspberry Pi Streamer Config</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
+        label { display: block; margin-top: 10px; font-weight: bold; }
+        input[type="text"], select { width: 95%; padding: 10px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; }
+        input[type="checkbox"] { margin-top: 10px; }
+        button { padding: 10px 15px; background-color: #5cb85c; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 20px; }
+        button:hover { background-color: #4cae4c; }
+        .control-buttons button { background-color: #007bff; margin-right: 10px; }
+        .control-buttons button.stop { background-color: #d9534f; }
+        .status { margin-top: 20px; padding: 10px; background-color: #e9e9e9; border-radius: 4px; }
+        .config-section { border: 1px solid #eee; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Raspberry Pi Streamer Configuration</h1>
+
+        <div class="status">
+            <h2>Current Status</h2>
+            <p><strong>FFmpeg Running:</strong> <span id="statusRunning">Unknown</span></p>
+            <p><strong>FFmpeg PID:</strong> <span id="statusPid">Unknown</span></p>
+            <p><strong>Current Command:</strong> <pre id="statusCmd">Unknown</pre></p>
+            <div class="control-buttons">
+                <button onclick="manualStart()">Start Stream</button>
+                <button class="stop" onclick="manualStop()">Stop Stream</button>
+            </div>
+        </div>
+
+        <form id="configForm">
+            <h2>Input Source</h2>
+            <label for="input_type">Input Type:</label>
+            <select id="input_type" name="input_type" onchange="toggleInputFields()">
+                <option value="dji_rtmp" {% if config.input_type == 'dji_rtmp' %}selected{% endif %}>DJI Osmo (RTMP)</option>
+                <option value="usb_cam" {% if config.input_type == 'usb_cam' %}selected{% endif %}>USB Webcam</option>
+            </select>
+
+            <div id="dji_rtmp_fields" class="config-section">
+                <h3>DJI RTMP Settings</h3>
+                <label for="dji_stream_key">DJI Stream Key (Osmo will stream to <code>rtmp://<RPI_IP>:1935/live/<this_key></code>):</label>
+                <input type="text" id="dji_stream_key" name="dji_stream_key" value="{{ config.dji_stream_key }}">
+            </div>
+
+            <div id="usb_cam_fields" class="config-section">
+                <h3>USB Webcam Settings</h3>
+                <label for="usb_device">USB Device Path:</label>
+                <input type="text" id="usb_device" name="usb_device" value="{{ config.usb_device }}">
+                <label for="usb_input_format">USB Input Format (e.g., mjpeg, yuyv422):</label>
+                <input type="text" id="usb_input_format" name="usb_input_format" value="{{ config.usb_input_format }}">
+                <label for="usb_resolution">USB Resolution (e.g., 1280x720):</label>
+                <input type="text" id="usb_resolution" name="usb_resolution" value="{{ config.usb_resolution }}">
+                <label for="usb_framerate">USB Framerate:</label>
+                <input type="text" id="usb_framerate" name="usb_framerate" value="{{ config.usb_framerate }}">
+            </div>
+
+            <h2>Output</h2>
+            <div class="config-section">
+                <label for="output_rtsp_url">Target RTSP Server URL (e.g., <code>rtsp://your-server/live/stream1</code>):</label>
+                <input type="text" id="output_rtsp_url" name="output_rtsp_url" value="{{ config.output_rtsp_url }}">
+            </div>
+
+            <h2>FFmpeg Settings</h2>
+             <div class="config-section">
+                <label for="ffmpeg_loglevel">FFmpeg Log Level:</label>
+                <select id="ffmpeg_loglevel" name="ffmpeg_loglevel">
+                    {% for level in ["quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug"] %}
+                    <option value="{{ level }}" {% if config.ffmpeg_loglevel == level %}selected{% endif %}>{{ level }}</option>
+                    {% endfor %}
+                </select>
+                <br>
+                <input type="checkbox" id="re_encode_video" name="re_encode_video" {% if config.re_encode_video %}checked{% endif %} onchange="toggleEncodeFields()">
+                <label for="re_encode_video" style="display: inline; font-weight: normal;">Re-encode Video (CPU intensive, use 'copy' if possible)</label>
+
+                <div id="encode_options" class="{% if not config.re_encode_video %}hidden{% endif %}">
+                    <label for="video_codec">Video Codec (if re-encoding, e.g., libx264, libx265):</label>
+                    <input type="text" id="video_codec" name="video_codec" value="{{ config.video_codec }}">
+                    <label for="video_preset">Video Preset (e.g., ultrafast, superfast, medium):</label>
+                    <input type="text" id="video_preset" name="video_preset" value="{{ config.video_preset }}">
+                    <label for="video_bitrate">Video Bitrate (e.g., 2000k, 4M):</label>
+                    <input type="text" id="video_bitrate" name="video_bitrate" value="{{ config.video_bitrate }}">
+
+                    <label for="audio_codec">Audio Codec (e.g., aac, copy):</label>
+                    <input type="text" id="audio_codec" name="audio_codec" value="{{ config.audio_codec }}">
+                    <label for="audio_bitrate">Audio Bitrate (e.g., 128k):</label>
+                    <input type="text" id="audio_bitrate" name="audio_bitrate" value="{{ config.audio_bitrate }}">
+                </div>
+            </div>
+
+            <button type="submit">Save Configuration & Restart Stream</button>
+        </form>
+        <p id="message"></p>
+    </div>
+
+    <script>
+        function toggleInputFields() {
+            const inputType = document.getElementById('input_type').value;
+            document.getElementById('dji_rtmp_fields').style.display = (inputType === 'dji_rtmp') ? 'block' : 'none';
+            document.getElementById('usb_cam_fields').style.display = (inputType === 'usb_cam') ? 'block' : 'none';
+        }
+        toggleInputFields(); // Initial call
+
+        function toggleEncodeFields() {
+            const reEncode = document.getElementById('re_encode_video').checked;
+            document.getElementById('encode_options').style.display = reEncode ? 'block' : 'none';
+        }
+        toggleEncodeFields(); // Initial call
+
+        document.getElementById('configForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const formData = new FormData(this);
+            fetch('/', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('message').textContent = data.message;
+                if(data.success) {
+                    setTimeout(fetchStatus, 1000); // Update status after a second
+                }
+            })
+            .catch(error => {
+                document.getElementById('message').textContent = 'Error: ' + error;
+            });
+        });
+
+        function fetchStatus() {
+            fetch('/status')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('statusRunning').textContent = data.is_running ? 'Yes' : 'No';
+                document.getElementById('statusPid').textContent = data.pid || 'N/A';
+                document.getElementById('statusCmd').textContent = data.ffmpeg_command || 'N/A';
+            })
+            .catch(error => console.error('Error fetching status:', error));
+        }
+
+        function manualStart() {
+            fetch('/start', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                 document.getElementById('message').textContent = data.message;
+                 setTimeout(fetchStatus, 1000);
+            });
+        }
+
+        function manualStop() {
+            fetch('/stop', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                 document.getElementById('message').textContent = data.message;
+                 setTimeout(fetchStatus, 1000);
+            });
+        }
+
+        fetchStatus(); // Initial status fetch
+        setInterval(fetchStatus, 5000); // Refresh status every 5 seconds
+    </script>
+</body>
+</html>
