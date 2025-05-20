@@ -34,6 +34,7 @@ services:
     devices:
       - /dev/video0:/dev/video0
       - /dev/video1:/dev/video1
+      - /dev/snd:/dev/snd
     privileged: true
     # For Raspberry Pi (arm architecture), ensure your Python base image in streamer/Dockerfile supports arm
     # python:3.9-slim usually has multi-arch support.

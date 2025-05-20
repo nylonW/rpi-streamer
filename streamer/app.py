@@ -24,7 +24,9 @@ DEFAULT_CONFIG = {
     "video_preset": "ultrafast", # For libx264/libx265 if re-encoding
     "video_bitrate": "2000k",   # For libx264/libx265 if re-encoding
     "audio_codec": "aac",     # e.g., aac, copy
-    "audio_bitrate": "128k"   # if re-encoding
+    "audio_bitrate": "128k",   # if re-encoding
+    "usb_audio_device": "",   # e.g., "hw:1,0" for ALSA, or empty to try video device
+    "disable_usb_audio": False # Set to true to add -an for USB camera
 }
 
 def load_config():
@@ -68,6 +70,7 @@ def start_ffmpeg_process(config):
     stop_ffmpeg_process() # Ensure any existing process is stopped
 
     input_options = []
+    additional_input_options = [] # For separate audio inputs, etc.
     input_url = ""
 
     if config["input_type"] == "dji_rtmp":
@@ -82,6 +85,11 @@ def start_ffmpeg_process(config):
             "-video_size", config["usb_resolution"],
             "-framerate", config["usb_framerate"]
         ])
+        # Check for separate USB audio device if not disabled
+        if not config.get("disable_usb_audio", False) and config.get("usb_audio_device"):
+            # Assuming ALSA for Linux. User needs to ensure the device exists.
+            # Example: "hw:1,0". Could add config for audio input format if needed.
+            additional_input_options.extend(["-f", "alsa", "-i", config["usb_audio_device"]])
     else:
         print(f"Unknown input type: {config['input_type']}")
         return
@@ -91,6 +99,7 @@ def start_ffmpeg_process(config):
     # Codec options
     video_codec_opts = []
     audio_codec_opts = []
+    no_audio_output = False
 
     if config.get("re_encode_video", False):
         video_codec_opts.extend([
@@ -110,39 +119,48 @@ def start_ffmpeg_process(config):
     else:
         video_codec_opts.extend(["-c:v", "copy"])
 
-    # For USB cams, audio might not be copied directly or might not exist.
-    # Default to re-encoding AAC or copying if source is RTMP
-    if config["input_type"] == "usb_cam": # and not config.get("re_encode_video", False) <- this condition is now handled by the video section for usb_cam
-        # If copying video from USB, we often need to encode audio
-        # This assumes USB audio is available and compatible with AAC
-        # Also, if video is re-encoded (now forced for USB copy), audio should also be re-encoded
+    # Audio codec configuration
+    if config["input_type"] == "usb_cam" and config.get("disable_usb_audio", False):
+        no_audio_output = True
+    elif config["input_type"] == "usb_cam":
+        # Always re-encode audio for USB cam if not disabled,
+        # as USB audio is often raw (PCM) or needs specific handling.
+        # This applies whether using audio from video device or separate audio device.
         audio_codec_opts.extend([
             "-c:a", config.get("audio_codec", "aac"),
             "-b:a", config.get("audio_bitrate", "128k")
         ])
-    elif config.get("re_encode_video", False): # Also re-encode audio if video is re-encoded
-         audio_codec_opts.extend([
-            "-c:a", config.get("audio_codec", "aac"),
-            "-b:a", config.get("audio_bitrate", "128k")
-        ])
-    else: # Copy audio for DJI RTMP or if not re-encoding video
-        audio_codec_opts.extend(["-c:a", "copy"])
+    elif config["input_type"] == "dji_rtmp":
+        if config.get("re_encode_video", False): # Re-encode audio if video is re-encoded
+             audio_codec_opts.extend([
+                "-c:a", config.get("audio_codec", "aac"),
+                "-b:a", config.get("audio_bitrate", "128k")
+            ])
+        else: # Copy audio for DJI RTMP if not re-encoding video
+            audio_codec_opts.extend(["-c:a", "copy"])
+    # else: # No audio opts for other potential future input types unless specified
 
-
-    ffmpeg_cmd = [
+    # Construct FFmpeg command
+    ffmpeg_cmd_parts = [
         "ffmpeg",
         "-loglevel", config["ffmpeg_loglevel"],
         *input_options,
-        "-i", input_url,
-        *video_codec_opts,
-        *audio_codec_opts,
+        *additional_input_options, # Add separate audio input here if configured
+    ]
+
+    ffmpeg_cmd_parts.extend(video_codec_opts)
+
+    if no_audio_output:
+        ffmpeg_cmd_parts.append("-an") # Add -an (no audio) if requested
+    else:
+        ffmpeg_cmd_parts.extend(audio_codec_opts) # Add audio codec options
+
+    ffmpeg_cmd_parts.extend([
         "-f", "rtsp",
         "-rtsp_transport", "tcp", # More reliable over networks
         output_rtsp_url
-    ]
-    # If no audio with USB cam and it's causing issues, add:
-    # if config["input_type"] == "usb_cam":
-    #     ffmpeg_cmd.insert(ffmpeg_cmd.index("-f", ffmpeg_cmd.index("-c:a") + 1) -1, "-an") # No audio
+    ])
+    ffmpeg_cmd = ffmpeg_cmd_parts
 
     print(f"Starting FFmpeg with command: {' '.join(ffmpeg_cmd)}")
     try:
@@ -173,8 +191,9 @@ def index():
     config = load_config()
     if request.method == 'POST':
         form_data = request.form.to_dict()
-        # Convert checkbox value
+        # Convert checkbox values
         form_data['re_encode_video'] = 're_encode_video' in request.form
+        form_data['disable_usb_audio'] = 'disable_usb_audio' in request.form
 
         config.update(form_data)
         save_config(config)
