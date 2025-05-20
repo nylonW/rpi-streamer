@@ -31,6 +31,10 @@ services:
     depends_on:
       - nginx-rtmp
     restart: unless-stopped
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1
+    privileged: true
     # For Raspberry Pi (arm architecture), ensure your Python base image in streamer/Dockerfile supports arm
     # python:3.9-slim usually has multi-arch support.
     # If using specific base images, you might need `platform: linux/arm/v7` or `linux/arm64`
