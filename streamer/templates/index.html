@@ -58,6 +58,12 @@
                 <input type="text" id="usb_resolution" name="usb_resolution" value="{{ config.usb_resolution }}">
                 <label for="usb_framerate">USB Framerate:</label>
                 <input type="text" id="usb_framerate" name="usb_framerate" value="{{ config.usb_framerate }}">
+
+                <label for="usb_audio_device">USB Audio Device (e.g., hw:1,0 - leave blank to try video device):</label>
+                <input type="text" id="usb_audio_device" name="usb_audio_device" value="{{ config.get('usb_audio_device', '') }}">
+
+                <input type="checkbox" id="disable_usb_audio" name="disable_usb_audio" {% if config.get('disable_usb_audio', False) %}checked{% endif %}>
+                <label for="disable_usb_audio" style="display: inline; font-weight: normal;">Disable USB Audio (adds -an)</label>
             </div>
 
             <h2>Output</h2>
@@ -103,6 +109,22 @@
             const inputType = document.getElementById('input_type').value;
             document.getElementById('dji_rtmp_fields').style.display = (inputType === 'dji_rtmp') ? 'block' : 'none';
             document.getElementById('usb_cam_fields').style.display = (inputType === 'usb_cam') ? 'block' : 'none';
+
+            // Show/hide USB audio options based on input type
+            const usbAudioDeviceField = document.getElementById('usb_audio_device');
+            const disableUsbAudioField = document.getElementById('disable_usb_audio');
+            const disableUsbAudioLabel = document.querySelector('label[for="disable_usb_audio"]'); // get the label too
+
+            if (inputType === 'usb_cam') {
+                usbAudioDeviceField.style.display = 'block';
+                // Assuming the label for usb_audio_device is directly before it or handled by general styles
+                disableUsbAudioField.style.display = 'inline'; // Checkbox is inline
+                if (disableUsbAudioLabel) disableUsbAudioLabel.style.display = 'inline';
+            } else {
+                usbAudioDeviceField.style.display = 'none';
+                disableUsbAudioField.style.display = 'none';
+                if (disableUsbAudioLabel) disableUsbAudioLabel.style.display = 'none';
+            }
         }
         toggleInputFields(); // Initial call
 
