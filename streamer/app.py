@@ -99,23 +99,27 @@ def start_ffmpeg_process(config):
             "-b:v", config.get("video_bitrate", "2000k"),
             "-tune", "zerolatency"
         ])
+    elif config["input_type"] == "usb_cam": # Force re-encode for USB if copy is selected, as M-JPEG (common USB format) is not widely supported by HLS
+        print("USB camera input detected with video copy requested. Forcing H264 encoding for HLS compatibility.")
+        video_codec_opts.extend([
+            "-c:v", "libx264", # Force H264
+            "-preset", config.get("video_preset", "ultrafast"),
+            "-b:v", config.get("video_bitrate", "2000k"),
+            "-tune", "zerolatency"
+        ])
     else:
         video_codec_opts.extend(["-c:v", "copy"])
 
     # For USB cams, audio might not be copied directly or might not exist.
     # Default to re-encoding AAC or copying if source is RTMP
-    if config["input_type"] == "usb_cam" and not config.get("re_encode_video", False):
+    if config["input_type"] == "usb_cam": # and not config.get("re_encode_video", False) <- this condition is now handled by the video section for usb_cam
         # If copying video from USB, we often need to encode audio
         # This assumes USB audio is available and compatible with AAC
+        # Also, if video is re-encoded (now forced for USB copy), audio should also be re-encoded
         audio_codec_opts.extend([
             "-c:a", config.get("audio_codec", "aac"),
             "-b:a", config.get("audio_bitrate", "128k")
         ])
-        # To try and get audio from USB, you might need to add another -i for ALSA/Pulse
-        # e.g. -f alsa -i hw:0
-        # For simplicity here, we are not explicitly adding a separate audio input for USB cam
-        # Many USB webcams provide audio multiplexed with video through V4L2
-        # If no audio with USB cam, add -an to ffmpeg_cmd
     elif config.get("re_encode_video", False): # Also re-encode audio if video is re-encoded
          audio_codec_opts.extend([
             "-c:a", config.get("audio_codec", "aac"),
